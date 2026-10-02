@@ -15,6 +15,7 @@ import argparse
 import csv
 from pathlib import Path
 
+from PIL import Image
 from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
@@ -258,7 +259,21 @@ def draw_check_header(c, left, right):
 
 
 PROBLEM_W = 292
-PROBLEM_MAX_H = 430
+PROBLEM_MAX_W = PAGE_W - 80
+PROBLEM_MAX_H = 720
+CROPPED_MIN_DPI = 200  # crop_problems.py가 저장한 이미지는 DPI에 실제 크기가 들어 있다
+
+
+def problem_image_size(path):
+    with Image.open(path) as im:
+        iw, ih = im.size
+        dpi = (im.info.get("dpi") or (0, 0))[0]
+    if dpi >= CROPPED_MIN_DPI:
+        w, h = iw * 72 / dpi, ih * 72 / dpi
+    else:  # 캡처 화면 등: 왼쪽 문항 칸 폭에 맞춘다
+        w, h = PROBLEM_W, PROBLEM_W * ih / iw
+    fit = min(1, PROBLEM_MAX_W / w, PROBLEM_MAX_H / h)
+    return w * fit, h * fit
 
 
 def draw_problem(c, cls, seq_no, exam, number, page_no):
@@ -279,14 +294,8 @@ def draw_problem(c, cls, seq_no, exam, number, page_no):
     image = find_problem_image(cls["problems"], exam, number)
     area_y = 76
     if image:
-        img = ImageReader(str(image))
-        iw, ih = img.getSize()
-        w = PROBLEM_W
-        h = w * ih / iw
-        if h > PROBLEM_MAX_H:
-            h = PROBLEM_MAX_H
-            w = h * iw / ih
-        c.drawImage(img, left, top(area_y + h), w, h, mask="auto")
+        w, h = problem_image_size(image)
+        c.drawImage(ImageReader(str(image)), left, top(area_y + h), w, h, mask="auto")
     else:
         h = 210
         c.setStrokeColor(LIGHT_RULE)
