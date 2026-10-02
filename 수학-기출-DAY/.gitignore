@@ -1,0 +1,8 @@
+# 시험지, 잘라낸 문항·해설, 완성본은 저작권이 각 교육청·사관학교·평가원에 있어 공개 저장소에 올리지 않는다
+exams/
+problems/
+solutions/
+sheets/
+완성본/
+.cache/
+__pycache__/
