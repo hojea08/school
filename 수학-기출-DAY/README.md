@@ -11,6 +11,9 @@
 - **PRO반**: 어려운 4점 **14, 15, 20, 21, 22번**
 - **BASIC반**: 쉬운 4점 **9, 10, 11, 12, 13번**
 
+PDF를 만드는 코드는 [DAY 워크북 스킬](../.claude/skills/exam-day-workbook/SKILL.md)에 있습니다.
+이 폴더에는 묶음별 설정(`학평.json`, `평가원.json`)과 빈 정답표, 빈 양식 PDF만 둡니다.
+
 ## 쪽 구성
 
 ```
@@ -51,40 +54,36 @@ PDF 책갈피에 DAY별·문항별 목차가 들어 있습니다.
 빠른답안은 손으로 적을 수 있게 빈칸으로 비워 두었습니다.
 기출 문항의 저작권은 각 교육청·사관학교·한국교육과정평가원에 있어서, 이 공개 저장소에는
 시험지와 문항이 들어간 완성본을 올리지 않습니다. 완성본은 아래 순서로 직접 만들어 개인 학습용으로만 쓰세요.
+Claude Code에서는 "평가원 수학 워크북 만들어 줘"처럼 말하면 스킬이 이 순서를 따라 합니다.
 
-평가원 시험지와 정답표는 [대학수학능력시험 홈페이지](https://www.suneung.re.kr)의
-「기출문제」(수능)와 「수능 모의평가」 게시판에 있습니다. 평가원은 해설지를 내지 않습니다.
+```bash
+pip install pymupdf reportlab pillow
+SK=../.claude/skills/exam-day-workbook/scripts
 
-1. 시험지 PDF를 `exams/<시험>/prob.pdf` 로 저장합니다.
-   ```
-   exams/2021-3월/prob.pdf
-   exams/2022-사관/prob.pdf
-   exams/2027-6월/prob.pdf
-   exams/2026-수능/prob.pdf
-   ```
-   폴더 이름은 정답 CSV의 `시험` 열과 같습니다. 공통·선택이 나뉜 회차는
-   공통(또는 아무 선택과목) 문제지면 됩니다. 9~22번은 공통 문항입니다.
-   수능은 정답표가 홀수형 기준이니 **홀수형** 문제지를 쓰세요
-   (홀수형·짝수형이 한 파일에 들어 있으면 앞쪽 홀수형에서 자동으로 자릅니다).
-2. 문항을 잘라냅니다. `problems/<시험>/<번호>.png` 가 생깁니다.
-   ```bash
-   pip install reportlab pymupdf pillow
-   python crop_problems.py
-   ```
-   글자가 텍스트로 들어 있는 PDF만 자동으로 됩니다. 스캔본이면 문항을 캡처해
-   같은 이름(`problems/2021-3월/14.png`, `.jpg`도 됨)으로 넣으면 됩니다.
-3. 정답을 적습니다. 교육청·사관은 `answers.csv`, 평가원은 `answers_평가원.csv`입니다.
-   1~15번은 `2`처럼 숫자만 적으면 `②`로 바뀝니다.
-4. 다시 만듭니다.
-   ```bash
-   python make_workbook.py                 # 교육청·사관, 두 반 모두
-   python make_workbook.py --set 평가원    # 평가원, 두 반 모두
-   python make_workbook.py --only PRO      # PRO반만
-   ```
+# 1. 시험지와 정답표 받기 (평가원: 공식 게시판, 교육청·사관: 자료 블로그 — 스킬 문서 참고)
+python $SK/sources.py kice-batch --area 수학 --years 2022-2027 --out exams
 
-이미지가 없는 문항은 점선 칸 그대로, 정답이 없는 칸은 빈칸 그대로 남습니다.
-`exams/`와 `problems/`는 `.gitignore`에 들어 있어 실수로 올라가지 않습니다.
+# 2. 문항 자르기 → problems/<시험>/<번호>.png, 그다음 모아보기로 전부 확인
+python $SK/crop.py exams --items 9 10 11 12 13 14 15 20 21 22 --out problems
+python $SK/sheets.py contact problems --out sheets
+
+# 3. 정답 읽기 → 정답표 그림과 다른 출처로 한 번 더 확인
+python $SK/answers.py exams --pdf official_ans.pdf --numbers 9-15 20-22 --render sheets/answers --csv answers_평가원.csv
+
+# 4. 워크북 만들기
+python $SK/make_workbook.py 평가원.json --out 완성본
+python $SK/make_workbook.py 학평.json --out 완성본
+```
+
+- 시험 폴더 이름은 `2021-3월`, `2022-사관`, `2027-6월`, `2026-수능`처럼 정답 CSV의 `시험` 열과 같습니다.
+- 수능은 정답표가 홀수형 기준이니 **홀수형** 문제지를 씁니다(한 파일에 둘 다 있으면 홀수형만 자릅니다).
+- 글자가 텍스트로 들어 있는 PDF만 자동으로 잘립니다. 스캔본이면 문항을 캡처해
+  `problems/2021-3월/14.png`처럼 넣으면 됩니다.
+- 정답 CSV에는 `2`처럼 숫자만 적어도 1~15번은 `②`로 바뀝니다.
+- 해설지는 시험 기관의 공식 해설이 있을 때만 따로 만듭니다. 평가원과 사관학교는 공식 해설이 없어 만들지 않습니다.
+
+`exams/`, `problems/`, `solutions/`, `sheets/`, `완성본/`은 `.gitignore`에 들어 있어 실수로 올라가지 않습니다.
 
 ## 글꼴
 
-`fonts/`의 Pretendard(SIL Open Font License 1.1, [OFL-Pretendard.txt](fonts/OFL-Pretendard.txt))를 씁니다.
+스킬의 `assets/fonts/`에 있는 Pretendard(SIL Open Font License 1.1)를 씁니다.
