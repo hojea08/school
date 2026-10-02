@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""교육청·사관 공통 DAY 워크북 PDF 생성기.
+"""교육청·사관 / 평가원 공통 DAY 워크북 PDF 생성기.
 
 한 DAY = 표지 1쪽(총 소요시간 · 피드백 · 빠른답안) + 문항 5쪽.
-25일차 × 6쪽 = 150쪽짜리 PDF를 반별(PRO / BASIC)로 하나씩 만든다.
+시험 한 회차가 한 DAY이고, 반별(PRO / BASIC)로 PDF를 하나씩 만든다.
 
-    python make_workbook.py            # 두 반 모두
-    python make_workbook.py --only PRO # PRO반만
+    python make_workbook.py                  # 교육청·사관 25일차, 두 반 모두
+    python make_workbook.py --set 평가원     # 평가원 6월·9월·수능 17일차
+    python make_workbook.py --only PRO       # PRO반만
 
-문항 이미지(problems/<시험>/<번호>.png)와 정답(answers.csv)은 선택이다.
+문항 이미지(problems/<시험>/<번호>.png)와 정답(answers.csv, answers_평가원.csv)은 선택이다.
 없으면 문항 자리는 비워 두고, 빠른답안 칸은 손으로 채울 수 있게 빈칸으로 둔다.
 """
 
@@ -26,26 +27,39 @@ from reportlab.pdfgen import canvas
 HERE = Path(__file__).resolve().parent
 PAGE_W, PAGE_H = A4
 
-# 사진 속 일차표 그대로: (학년도, 회차)
-SCHEDULE = [
-    ("2021", "3월"), ("2021", "4월"), ("2021", "7월"), ("2021", "10월"), ("2022", "사관"),
-    ("2022", "3월"), ("2022", "4월"), ("2022", "7월"), ("2022", "10월"), ("2023", "사관"),
-    ("2023", "3월"), ("2023", "4월"), ("2023", "7월"), ("2023", "10월"), ("2024", "사관"),
-    ("2024", "3월"), ("2024", "5월"), ("2024", "7월"), ("2024", "10월"), ("2025", "사관"),
-    ("2025", "3월"), ("2025", "5월"), ("2025", "7월"), ("2025", "10월"), ("2026", "사관"),
-]
+SETS = {
+    # 사진 속 일차표 그대로: (학년도, 회차)
+    "학평": {
+        "name": "교육청, 사관 공통",
+        "file": "교육청_사관_공통",
+        "answers": "answers.csv",
+        "schedule": [
+            ("2021", "3월"), ("2021", "4월"), ("2021", "7월"), ("2021", "10월"), ("2022", "사관"),
+            ("2022", "3월"), ("2022", "4월"), ("2022", "7월"), ("2022", "10월"), ("2023", "사관"),
+            ("2023", "3월"), ("2023", "4월"), ("2023", "7월"), ("2023", "10월"), ("2024", "사관"),
+            ("2024", "3월"), ("2024", "5월"), ("2024", "7월"), ("2024", "10월"), ("2025", "사관"),
+            ("2025", "3월"), ("2025", "5월"), ("2025", "7월"), ("2025", "10월"), ("2026", "사관"),
+        ],
+    },
+    # 최근 학년도부터 거꾸로, 한 해 안에서는 6월 → 9월 → 수능
+    "평가원": {
+        "name": "평가원 공통",
+        "file": "평가원_공통",
+        "answers": "answers_평가원.csv",
+        "schedule": [
+            ("2027", "6월"), ("2027", "9월"),
+            ("2026", "6월"), ("2026", "9월"), ("2026", "수능"),
+            ("2025", "6월"), ("2025", "9월"), ("2025", "수능"),
+            ("2024", "6월"), ("2024", "9월"), ("2024", "수능"),
+            ("2023", "6월"), ("2023", "9월"), ("2023", "수능"),
+            ("2022", "6월"), ("2022", "9월"), ("2022", "수능"),
+        ],
+    },
+}
 
 CLASSES = {
-    "PRO": {
-        "title": "교육청, 사관 공통 PRO반",
-        "numbers": [14, 15, 20, 21, 22],
-        "file": "교육청_사관_공통_PRO반.pdf",
-    },
-    "BASIC": {
-        "title": "교육청, 사관 공통 BASIC반",
-        "numbers": [9, 10, 11, 12, 13],
-        "file": "교육청_사관_공통_BASIC반.pdf",
-    },
+    "PRO": [14, 15, 20, 21, 22],
+    "BASIC": [9, 10, 11, 12, 13],
 }
 
 ALL_NUMBERS = [9, 10, 11, 12, 13, 14, 15, 20, 21, 22]
@@ -101,11 +115,11 @@ def load_answers(path):
     return answers
 
 
-def write_answers_template(path):
+def write_answers_template(path, schedule):
     with path.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow(["일차", "시험"] + [str(n) for n in ALL_NUMBERS])
-        for day, exam in enumerate(SCHEDULE, 1):
+        for day, exam in enumerate(schedule, 1):
             w.writerow([day, exam_key(exam)] + [""] * len(ALL_NUMBERS))
 
 
@@ -320,7 +334,7 @@ def build(cls, out_path, answers):
     c.setSubject("DAY별 " + ", ".join(str(n) for n in cls["numbers"]) + "번 묶음")
 
     page_no, seq_no = 1, 1
-    for day, exam in enumerate(SCHEDULE, 1):
+    for day, exam in enumerate(cls["schedule"], 1):
         key = f"day{day:02d}"
         c.bookmarkPage(key)
         c.addOutlineEntry(f"DAY {day:02d} · {exam_label(exam)}", key, level=0)
@@ -343,25 +357,34 @@ def build(cls, out_path, answers):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--set", choices=sorted(SETS), default="학평", help="시험 묶음")
     parser.add_argument("--only", choices=sorted(CLASSES), help="한 반만 만들기")
     parser.add_argument("--out", type=Path, default=HERE, help="PDF를 저장할 폴더")
-    parser.add_argument("--answers", type=Path, default=HERE / "answers.csv")
+    parser.add_argument("--answers", type=Path, help="정답 CSV (기본: 묶음별 answers 파일)")
     parser.add_argument("--problems", type=Path, default=HERE / "problems",
                         help="문항 이미지 폴더 (problems/<시험>/<번호>.png)")
     args = parser.parse_args()
 
+    exam_set = SETS[args.set]
+    answers_path = args.answers or HERE / exam_set["answers"]
     register_fonts()
-    if not args.answers.exists():
-        write_answers_template(args.answers)
-        print(f"정답 입력용 빈 표를 만들었습니다: {args.answers}")
-    answers = load_answers(args.answers)
+    if not answers_path.exists():
+        write_answers_template(answers_path, exam_set["schedule"])
+        print(f"정답 입력용 빈 표를 만들었습니다: {answers_path}")
+    answers = load_answers(answers_path)
 
     args.out.mkdir(parents=True, exist_ok=True)
-    for name, cls in CLASSES.items():
+    for name, numbers in CLASSES.items():
         if args.only and name != args.only:
             continue
-        cls = dict(cls, short=f"{name}반", problems=args.problems)
-        out = args.out / cls["file"]
+        cls = {
+            "title": f"{exam_set['name']} {name}반",
+            "numbers": numbers,
+            "schedule": exam_set["schedule"],
+            "short": f"{name}반",
+            "problems": args.problems,
+        }
+        out = args.out / f"{exam_set['file']}_{name}반.pdf"
         pages = build(cls, out, answers)
         print(f"{out.name}: {pages}쪽")
 

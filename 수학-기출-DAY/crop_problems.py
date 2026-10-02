@@ -69,12 +69,27 @@ def crop_one(doc, nums, two_col, n):
     nxt = nums.get(n + 1)
     if nxt and nxt[0] == pno and nxt[2] > y0 + 5 and (not two_col or (nxt[1] < W / 2) == left):
         bottom = nxt[2] - 4
-    # 공통 마지막 쪽의 「※ 확인 사항」 상자는 뺀다
-    for s in spans:
-        if re.search(r"확인\s*사항", s["text"]) and s["bbox"][1] > top:
-            c = pymupdf.Rect(s["bbox"]).tl + (1, 1)
-            around = [d["rect"] for d in drawings if d["rect"].contains(c) and d["rect"].height < 0.3 * H]
-            bottom = min(bottom, min(r.y0 for r in around) - 4 if around else s["bbox"][1] - 20)
+    # 공통 마지막 쪽의 「※ 확인 사항」 상자는 뺀다. 「확인」「사항」이 따로 떨어진
+    # 글자 덩어리이거나 상자가 선 네 개로 그려진 시험지도 있어, 같은 줄의 글자를 모아서 본다.
+    rows = []
+    for s in sorted((s for s in spans if cx0 <= s["bbox"][0] < cx1), key=lambda s: s["bbox"][1]):
+        if rows and s["bbox"][1] - rows[-1][0]["bbox"][1] < 3:
+            rows[-1].append(s)
+        else:
+            rows.append([s])
+    for row in rows:
+        row.sort(key=lambda s: s["bbox"][0])
+        r = pymupdf.Rect(row[0]["bbox"])
+        for s in row[1:]:
+            r |= s["bbox"]
+        if r.y0 <= top or not re.search(r"확인\s*사항", "".join(s["text"] for s in row)):
+            continue
+        c = r.tl + (1, 1)
+        edges = [d["rect"].y0 for d in drawings
+                 if (d["rect"].contains(c) and d["rect"].height < 0.3 * H)
+                 or (d["rect"].height < 1.5 and 0 <= r.y0 - d["rect"].y0 < 15
+                     and d["rect"].x0 <= r.x0 and d["rect"].x1 >= r.x1)]
+        bottom = min(bottom, min(edges) - 4 if edges else r.y0 - 20)
 
     R = pymupdf.Rect(cx0, top, cx1, bottom)
     boxes, sizes = [], []
