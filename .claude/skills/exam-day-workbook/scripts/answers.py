@@ -4,6 +4,8 @@
     python answers.py exams --pdf official_ans.pdf --numbers 9-15 20-22 --csv answers.csv --render sheets
     python answers.py exams --pdf official_ans.pdf --numbers 1-20 --check ans.pdf
     python answers.py 정답표.pdf                      # 한 파일만 읽어 보기
+    python answers.py exams --only 2021-수능 --pdf official_ans.pdf --page 3 --prefix 나형 --numbers 5 8 13 22 --csv answers.csv
+                                                      # 가형·나형 시험: CSV 열이 「나형5」 …(정답표 3쪽이 나형 홀수형)
 
 exams/<시험>/<pdf> 를 시험마다 읽는다. 읽는 모양(--format):
   kice   평가원 정답표: (문항 번호, 정답, 배점) 세 칸이 단마다 이어진다. 머리글로 공통·선택과목을 가른다.
@@ -25,7 +27,7 @@ from pathlib import Path
 import pymupdf
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import decode_pua, parse_numbers, same_answer  # noqa: E402
+from common import answer_key, decode_pua, number_key, parse_numbers, same_answer  # noqa: E402
 
 NUM_RE = re.compile(r"[1-9]\d?")
 ANS_RE = re.compile(r"[①②③④⑤⓵⓶⓷⓸⓹]|\d{1,4}")
@@ -367,9 +369,12 @@ def write_csv(path, header, rows):
 
 def update_csv(path, exam, values):
     header, rows = read_csv(path)
-    for n in sorted(values, key=int):
+    for n in sorted(values, key=number_key):
         if str(n) not in header:
             header.append(str(n))
+    # 번호 열은 숫자 → 앞 글자 붙은 번호(가형1 …, 나형1 …) 순서로
+    fixed = [h for h in header if answer_key(h) is None]
+    header = fixed + sorted((h for h in header if answer_key(h) is not None), key=lambda h: number_key(answer_key(h)))
     row = next((r for r in rows if r.get("시험") == exam), None)
     if row is None:
         row = {"시험": exam}
@@ -409,6 +414,7 @@ def main():
     ap.add_argument("--check", nargs="*", default=[], help="맞춰 볼 두 번째 출처 PDF 이름(시험 폴더 안)")
     ap.add_argument("--render", type=Path, help="정답표 그림을 여기에 <시험>.png 로")
     ap.add_argument("--json", type=Path, help="읽은 전체 결과를 JSON으로")
+    ap.add_argument("--prefix", default="", help="CSV 열 이름 앞 글자(예: 가형 → 「가형26」 열). crop.py --prefix 와 같게")
     args = ap.parse_args()
 
     if args.src.is_file():
@@ -467,7 +473,8 @@ def main():
             if diff:
                 bad += 1
         if args.csv:
-            update_csv(args.csv, d.name, {n: v for n, v in values.items() if v is not None})
+            update_csv(args.csv, d.name, {f"{args.prefix}{n}" if args.prefix else n: v
+                                          for n, v in values.items() if v is not None})
     if args.json:
         args.json.write_text(json.dumps(dump, ensure_ascii=False, indent=1), encoding="utf-8")
     if args.csv:

@@ -17,6 +17,8 @@
     python sources.py unzip 직업탐구영역_문제지.zip --match "공업 일반" --out exams/2027-6월/prob.pdf
 
 kice-get 은 받은 파일을 시험 폴더에 원래 이름으로 두고, 문제지는 prob.pdf, 정답표는 official_ans.pdf 로도 복사한다.
+2021학년도까지(가형·나형)는 prob_가형.pdf, prob_나형.pdf(수능은 zip 안 홀수형), official_ans_가형.pdf …로 둔다.
+정답표가 한 파일이면 official_ans.pdf 하나에 쪽마다 형이 나뉘어 있다(쪽 목록을 알려 준다).
 """
 
 import argparse
@@ -37,6 +39,7 @@ OBJECTION_LIST = ("https://www.kice.re.kr/boardCnts/list.do?boardID=10024&m=0501
                   "&searchType=S&searchStr={kw}&page={page}")
 OBJECTION_VIEW = "https://www.kice.re.kr/boardCnts/view.do?boardID=10024&boardSeq={seq}&lev=0&m=050102&s=kice"
 CACHE = Path(".cache")
+FORMS = ("가형", "나형")   # 2021학년도까지 수학 문제지
 
 
 def clean(fragment):
@@ -109,11 +112,14 @@ def classify(name):
         return "solution"
     if "문제" in n:
         return "problem"
+    if n.lower().endswith(".zip"):   # 「수학.zip」 「2교시_수학영역.zip」(2020·2021학년도 수능 문제지)
+        return "problem"
     return "other"
 
 
 def unzip_pick(zpath, match, out):
-    """zip 안에서 이름에 match가 든 파일을 꺼낸다. 이름은 cp949로 저장된 경우가 많다."""
+    """zip 안에서 이름에 match가 든 파일을 꺼낸다(match가 목록이면 모두 든 파일). 이름은 cp949로 저장된 경우가 많다."""
+    terms = [match] if isinstance(match, str) else list(match or [])
     zf = zipfile.ZipFile(zpath)
     names = []
     for info in zf.infolist():
@@ -124,7 +130,7 @@ def unzip_pick(zpath, match, out):
             except (UnicodeEncodeError, UnicodeDecodeError):
                 pass
         names.append(name)
-        if match and match.replace(" ", "") in name.replace(" ", ""):
+        if terms and all(t.replace(" ", "") in name.replace(" ", "") for t in terms):
             Path(out).parent.mkdir(parents=True, exist_ok=True)
             Path(out).write_bytes(zf.read(info))
             return name, names
@@ -162,12 +168,32 @@ def kice_get(kind, year, month, area, out_dir, subject=None, odd=True):
             print(f"  ✗ {target} 로 쓸 파일이 없음")
             ok = False
             continue
+        stem = Path(target).stem
+        # 가형·나형 파일이 따로 있으면 형마다 prob_가형.pdf …
+        forms = {f: [p for p in paths if f in p.name and p.suffix.lower() == ".pdf"] for f in FORMS}
+        if any(forms.values()):
+            for f, ps in forms.items():
+                if ps:
+                    shutil.copyfile(ps[0], out_dir / f"{stem}_{f}.pdf")
+                    print(f"  → {stem}_{f}.pdf ← {ps[0].name}")
+            continue
         # 홀수형 파일이 따로 있으면 그것
         paths.sort(key=lambda p: (0 if (odd and "홀수" in p.name) else 1, p.suffix != ".pdf"))
         src = paths[0]
         if src.suffix.lower() == ".zip":
+            _, names = unzip_pick(src, None, None)
+            zforms = [f for f in FORMS if any(f in n for n in names)]
+            if zforms and not subject:
+                for f in zforms:   # 수능 zip: 「수학(가형)_홀.pdf」 「2교시_수학영역_나형_홀.pdf」
+                    picked, _ = unzip_pick(src, [f, "홀"], out_dir / f"{stem}_{f}.pdf")
+                    print(f"  → {stem}_{f}.pdf ← {src.name} 안의 {picked}" if picked else f"  ✗ {f} 홀수형 없음: {names}")
+                    ok = ok and bool(picked)
+                continue
+            if not subject and odd and any("홀수" in n for n in names):
+                picked, _ = unzip_pick(src, "홀수", out_dir / target)   # 「수학영역_홀수형.pdf」(2022학년도 수능)
+                print(f"  → {target} ← {src.name} 안의 {picked}")
+                continue
             if not subject:
-                _, names = unzip_pick(src, None, None)
                 print(f"  ! {src.name} 는 과목별 zip입니다. --subject 로 고르세요: {names}")
                 ok = False
                 continue
@@ -177,14 +203,31 @@ def kice_get(kind, year, month, area, out_dir, subject=None, odd=True):
         else:
             shutil.copyfile(src, out_dir / target)
             print(f"  → {target} ← {src.name}")
+            if kind_ == "answer":
+                note_form_pages(out_dir / target)
     return ok
+
+
+def note_form_pages(pdf):
+    """정답표 한 파일에 가형·나형이 쪽마다 있으면 쪽 목록을 알려 준다(answers.py --page 에 쓴다)."""
+    import pymupdf
+    pages = []
+    for i, pg in enumerate(pymupdf.open(pdf)):
+        flat = re.sub(r"\s", "", pg.get_text())
+        form = next((f for f in FORMS if f"({f})" in flat), None)
+        odd = "홀수" if "(홀수)" in flat else ("짝수" if "(짝수)" in flat else "")
+        if form:
+            pages.append(f"{i + 1}쪽 {form}{' ' + odd if odd else ''}")
+    if pages:
+        print("    정답표 쪽: " + ", ".join(pages) + " → answers.py --page")
 
 
 def objections(since=None, keyword=None, pages=6):
     """평가원 이의신청 심사 결과 글 목록과 본문/첨부의 결론 문장."""
     import pymupdf
     found = {}
-    for kw in ("이의신청", "정답 확정"):
+    # 「이의신청 심사 결과」 말고 「정답 발표」로만 올라온 해도 있다(2023학년도 6월, 2024·2025학년도 모평 등)
+    for kw in ("이의신청", "정답 확정", "정답 발표"):
         for pg in range(1, pages + 1):
             h = page(OBJECTION_LIST.format(kw=urllib.parse.quote(kw), page=pg), fresh=True)
             n = 0
@@ -202,7 +245,7 @@ def objections(since=None, keyword=None, pages=6):
     for seq, (title, date) in rows:
         if since and date < since:
             continue
-        if "결과" not in title and "확정" not in title:
+        if not any(w in title for w in ("결과", "확정", "정답 발표")):
             continue
         view = OBJECTION_VIEW.format(seq=seq)
         h = page(view)

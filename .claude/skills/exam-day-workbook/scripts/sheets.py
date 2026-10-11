@@ -82,24 +82,25 @@ def overlay(exams, problems, out, pdf_name="prob.pdf", only=None, zoom=1.0):
         if only and d.name not in only:
             continue
         man = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
-        pdf = exams / d.name / man.get("pdf", pdf_name)
-        if not pdf.exists():
-            continue
-        doc = pymupdf.open(pdf)
-        boxes = {}
+        boxes = {}   # (PDF 이름, 쪽) → 상자들. crop.py --prefix 로 합친 manifest는 문항마다 PDF가 다르다
         for i, it in enumerate(man["items"]):
+            name = it.get("pdf", man.get("pdf", pdf_name))
             for seg in it["segments"]:
-                boxes.setdefault(seg[0], []).append((it["label"], seg[1:], COLORS[i % len(COLORS)]))
-        for pno in sorted(boxes):
-            page = doc[pno - 1]
+                boxes.setdefault((name, seg[0]), []).append((it["label"], seg[1:], COLORS[i % len(COLORS)]))
+        for name, pno in sorted(boxes):
+            pdf = exams / d.name / name
+            if not pdf.exists():
+                continue
+            page = pymupdf.open(pdf)[pno - 1]
             pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             dr = ImageDraw.Draw(img)
-            for label, (x0, y0, x1, y1), color in boxes[pno]:
+            for label, (x0, y0, x1, y1), color in boxes[(name, pno)]:
                 dr.rectangle([x0 * zoom, y0 * zoom, x1 * zoom, y1 * zoom], outline=color, width=3)
                 dr.rectangle([x0 * zoom, y0 * zoom, x0 * zoom + 70, y0 * zoom + 24], fill=color)
                 dr.text((x0 * zoom + 4, y0 * zoom + 2), label, fill="white", font=font(18))
-            path = out / f"{d.name}_p{pno}.png"
+            stem = "" if len({n for n, _ in boxes}) == 1 else f"_{Path(name).stem}"
+            path = out / f"{d.name}{stem}_p{pno}.png"
             img.save(path)
             made.append(path)
     return made
