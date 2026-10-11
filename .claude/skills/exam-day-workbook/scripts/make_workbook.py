@@ -20,6 +20,9 @@
   short_answer  (선택) 숫자로 적힌 답을 원문자로 바꾸지 않을 번호, 예: "16-22,29-30"
   check_steps   (선택) 학습체크 네 칸 글자
   feedback_head (선택) 피드백 표 머리글
+  exam_items    (선택) {"2021-6월": ["가형4", "가형8", "나형6"]} 이 시험들은 반의 문항 지정 대신 이 목록.
+                시험마다 문항이 다를 때(가형·나형 시험의 확률과 통계 문항 등). 「가형4」는 crop.py --prefix 가형 으로 자른 그림
+  same_as       (선택) {"2021-6월/가형8": "나형12"} 같은 문항이 다른 문제지에도 있으면 꼬리표에 「가형 8번 · 나형 12번」
 
 설정 파일의 상대 경로는 설정 파일이 있는 폴더 기준이다.
 문항 그림과 정답은 없어도 된다. 없으면 문항 자리는 점선 칸, 빠른답안은 빈칸으로 남는다.
@@ -39,8 +42,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (exam_label, format_answer, label_display, label_numbers,  # noqa: E402
-                    parse_item_spec, parse_numbers, register_fonts)
+from common import (answer_key, exam_label, format_answer, label_display,  # noqa: E402
+                    label_numbers, number_key, parse_item_spec, parse_numbers, register_fonts,
+                    split_label)
 
 PAGE_W, PAGE_H = A4
 
@@ -87,6 +91,8 @@ class Config:
         self.short_answer = set(parse_numbers([d["short_answer"]])) if d.get("short_answer") else set()
         self.check_steps = d.get("check_steps", CHECK_STEPS)
         self.feedback_head = d.get("feedback_head", FEEDBACK_HEAD)
+        self.exam_items = d.get("exam_items", {})
+        self.same_as = d.get("same_as", {})
 
     def all_numbers(self):
         nums = set()
@@ -94,7 +100,10 @@ class Config:
             for spec in specs:
                 kind, a, b = parse_item_spec(spec)
                 nums.update(range(a, b + 1))
-        return sorted(nums)
+        for labels in self.exam_items.values():
+            for label in labels:
+                nums.update(label_numbers(label))
+        return sorted(nums, key=number_key)
 
 
 def load_answers(path):
@@ -105,8 +114,8 @@ def load_answers(path):
         for row in csv.DictReader(f):
             key = (row.get("시험") or "").strip()
             if key:
-                answers[key] = {int(k): (v or "").strip() for k, v in row.items()
-                                if k and k.strip().isdigit()}
+                answers[key] = {answer_key(k): (v or "").strip() for k, v in row.items()
+                                if answer_key(k) is not None}
     return answers
 
 
@@ -120,7 +129,10 @@ def write_answers_template(cfg):
 
 
 def resolve_items(cfg, specs, exam, warn):
-    """반의 문항 지정을 이 시험의 라벨 목록으로. auto는 crop.py의 manifest.json을 본다."""
+    """반의 문항 지정을 이 시험의 라벨 목록으로. auto는 crop.py의 manifest.json을 본다.
+    설정의 exam_items에 있는 시험은 그 목록을 그대로 쓴다."""
+    if exam in cfg.exam_items:
+        return [str(l) for l in cfg.exam_items[exam]]
     labels = []
     for spec in specs:
         kind, a, b = parse_item_spec(spec)
@@ -133,7 +145,8 @@ def resolve_items(cfg, specs, exam, warn):
             labels += [str(n) for n in range(a, b + 1)]
             continue
         items = json.loads(manifest.read_text(encoding="utf-8"))["items"]
-        labels += [it["label"] for it in items if a <= min(it["numbers"]) and max(it["numbers"]) <= b]
+        labels += [it["label"] for it in items if a <= min(it["numbers"]) and max(it["numbers"]) <= b
+                   and not split_label(it["label"])[0]]
     return labels
 
 
@@ -148,7 +161,23 @@ def find_image(cfg, exam, label):
 
 def item_text(cfg, exam, label):
     subj = f" {cfg.subject}" if cfg.subject else ""
-    return f"{exam_label(exam)}{subj} {label_display(label)}번"
+    also = cfg.same_as.get(f"{exam}/{label}")
+    more = f" · {label_display(also)}번" if also else ""
+    return f"{exam_label(exam)}{subj} {label_display(label)}번{more}"
+
+
+def numbers_text(labels):
+    """표지 부제의 번호: 「14,15,20」, 묶음이 있으면 「6~7, 8」, 앞 글자가 있으면 「가형 4,8 · 나형 6」"""
+    groups = []
+    for label in labels:
+        prefix, a, b = split_label(label)
+        nums = str(a) if a == b else f"{a}~{b}"
+        if groups and groups[-1][0] == prefix:
+            groups[-1][1].append(nums)
+        else:
+            groups.append((prefix, [nums]))
+    sep = "," if all("-" not in l for l in labels) else ", "
+    return " · ".join((f"{p} " if p else "") + sep.join(ns) for p, ns in groups)
 
 
 # ── 문항 그림 나누기 ──────────────────────────────────────────────────────
@@ -235,7 +264,8 @@ def answer_groups(cfg, labels, exam_answers):
     groups = []
     for label in labels:
         vals = [format_answer(n, exam_answers.get(n, ""), cfg.short_answer) for n in label_numbers(label)]
-        if "-" in label:
+        _, a, b = split_label(label)
+        if a != b:
             joined = "".join(vals) if all(v in "①②③④⑤" for v in vals if v) else " ".join(vals)
             groups.append((f"{label_display(label)} {joined}" if all(vals) else "", all(vals)))
         else:
@@ -266,8 +296,7 @@ def draw_cover(c, cfg, cls_name, day, exam, labels, answers, page_no):
     c.setFont("P-Medium", 10)
     c.drawCentredString(box_x + label_w / 2, top(box_y + box_h / 2 + 3.5), "총 소요시간")
 
-    numbers = ",".join(label_display(l) for l in labels) if all("-" not in l for l in labels) \
-        else ", ".join(label_display(l) for l in labels)
+    numbers = numbers_text(labels)
     subj = f" {cfg.subject}" if cfg.subject else ""
     sub = f"({exam_label(exam)}{subj} {numbers}번)"
     c.setFillColor(SUB_INK)

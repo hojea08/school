@@ -1,5 +1,6 @@
 """스크립트들이 같이 쓰는 도구: 내려받기, 시험 이름, 문항 지정, 정답 표기, 글꼴."""
 
+import re
 import subprocess
 import sys
 import time
@@ -74,6 +75,37 @@ def exam_label(key):
 # "14"        한 문항
 # "4-9"       [4~9] 묶음(지문 + 문항 전체)
 # "auto:1-17" 1~17번 범위에서 시험지에 실제로 있는 묶음과 낱문항을 모두
+# "가형26"    번호 앞에 문제지 이름이 붙은 문항. 2021학년도까지의 가형·나형처럼
+#             한 시험에 문제지가 둘 이상일 때 쓴다(crop.py --prefix, 설정의 exam_items)
+
+LABEL_RE = re.compile(r"^(\D*?)(\d+)(?:-(\d+))?$")
+
+
+def split_label(label):
+    """「가형26」 → ("가형", 26, 26), 「4-9」 → ("", 4, 9), 「14」 → ("", 14, 14)"""
+    m = LABEL_RE.match(str(label).strip())
+    if not m:
+        raise ValueError(f"문항 번호를 읽을 수 없습니다: {label}")
+    a = int(m.group(2))
+    return m.group(1), a, int(m.group(3) or a)
+
+
+def number_key(n):
+    """정답 열 순서: 숫자 번호 다음에 앞 글자가 붙은 번호(가형1, 가형2, …, 나형1, …)."""
+    if isinstance(n, int):
+        return ("", n)
+    prefix, a, _ = split_label(n)
+    return (prefix, a)
+
+
+def answer_key(column):
+    """정답 CSV 열 이름 → 번호. 「14」 → 14, 「가형26」 → "가형26", 그 밖(「시험」 등)은 None."""
+    column = (column or "").strip()
+    if column.isdigit():
+        return int(column)
+    m = LABEL_RE.match(column)
+    return column if m and m.group(1) and not m.group(3) else None
+
 
 def parse_item_spec(spec):
     spec = str(spec).strip()
@@ -91,15 +123,16 @@ def item_label(kind, a, b):
 
 
 def label_numbers(label):
-    if "-" in label:
-        a, b = label.split("-")
-        return list(range(int(a), int(b) + 1))
-    return [int(label)]
+    """정답 CSV에서 찾을 번호들. 「6-7」 → [6, 7], 「가형26」 → ["가형26"]"""
+    prefix, a, b = split_label(label)
+    return [f"{prefix}{n}" if prefix else n for n in range(a, b + 1)]
 
 
 def label_display(label):
-    """「4-9」 → 「4~9」"""
-    return label.replace("-", "~")
+    """「4-9」 → 「4~9」, 「가형26」 → 「가형 26」"""
+    prefix, a, b = split_label(label)
+    nums = str(a) if a == b else f"{a}~{b}"
+    return f"{prefix} {nums}" if prefix else nums
 
 
 def expand_numbers(specs):
@@ -112,16 +145,14 @@ def expand_numbers(specs):
 
 
 def parse_numbers(parts):
-    """["9-15", "20-22"] 또는 ["9-15,20-22"] → [9, 10, …, 15, 20, 21, 22]"""
+    """["9-15", "20-22"] 또는 ["9-15,20-22"] → [9, 10, …, 15, 20, 21, 22]
+    앞 글자가 붙은 번호도 된다: "가형22-30" → ["가형22", …, "가형30"]"""
     nums = []
     for part in parts:
         for tok in str(part).replace(",", " ").split():
-            if "-" in tok:
-                a, b = tok.split("-")
-                nums += range(int(a), int(b) + 1)
-            elif tok:
-                nums.append(int(tok))
-    return sorted(set(nums))
+            prefix, a, b = split_label(tok)
+            nums += [f"{prefix}{n}" if prefix else n for n in range(a, b + 1)]
+    return sorted(set(nums), key=number_key)
 
 
 def same_answer(a, b):

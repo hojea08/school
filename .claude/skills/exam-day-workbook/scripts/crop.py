@@ -4,9 +4,11 @@
     python crop.py exams --items 14 15 20 21 22 --out problems          # 수학 낱문항
     python crop.py exams --items auto:1-20 --out problems              # 직업탐구: [6~7] 같은 지문 묶음도 함께
     python crop.py exams --items 14 15 --mode solution --pdf ans.pdf --out solutions   # 공식 해설지
+    python crop.py exams --only 2021-6월 --pdf prob_가형.pdf --prefix 가형 --items 4 8 13 --out problems
+                                                     # 문제지가 둘인 시험(가형·나형): 라벨 「가형4」, manifest에 합친다
 
 exams/<시험>/<pdf> 를 읽어 <out>/<시험>/<라벨>.png 와 manifest.json 을 쓴다.
-라벨은 낱문항이면 「14」, 묶음이면 「4-9」.
+라벨은 낱문항이면 「14」, 묶음이면 「4-9」. --prefix 가형 이면 「가형14」.
 
 · 글자가 텍스트로 들어 있는 PDF만 된다(스캔본은 문항 번호를 못 찾는다).
 · 수능처럼 홀수형·짝수형이 한 파일에 있으면 홀수형 쪽만 본다.
@@ -27,7 +29,7 @@ import pymupdf
 from PIL import Image, ImageOps, PngImagePlugin
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import item_label, parse_item_spec  # noqa: E402
+from common import item_label, number_key, parse_item_spec  # noqa: E402
 
 TARGET_PT = 10.2   # 워크북에서 본문 글자 크기
 MAX_W = 515        # 워크북 본문 폭(pt)
@@ -510,6 +512,7 @@ def main():
     ap.add_argument("--flow", action="store_true", help="낱문항도 다음 단으로 이어서 자른다")
     ap.add_argument("--marker", help="해설 문항 머리 정규식(기본: 「14. [출제의도]」 꼴)")
     ap.add_argument("--override", type=Path, help='{"<시험>/<라벨>": [[쪽, x0, y0, x1, y1], ...]}')
+    ap.add_argument("--prefix", default="", help="라벨 앞 글자(예: 가형). 있던 manifest.json에 합친다")
     args = ap.parse_args()
 
     marker_re = re.compile(args.marker) if args.marker else SOLUTION_RE
@@ -533,6 +536,7 @@ def main():
         manifest = {"exam": d.name, "pdf": args.pdf, "mode": args.mode, "items": []}
         notes = []
         for label, kind, numbers, segs, warnings in plans:
+            label = f"{args.prefix}{label}"
             key = f"{d.name}/{label}"
             if key in overrides:
                 segs = [(Page(doc, s[0] - 1), s[1], s[2], s[3], s[4]) for s in overrides[key]]
@@ -547,15 +551,21 @@ def main():
                 problems += 1
                 continue
             manifest["items"].append({
-                "label": label, "kind": kind, "numbers": numbers, "size_pt": size,
+                "label": label, "kind": kind, "numbers": numbers, "size_pt": size, "pdf": args.pdf,
                 "segments": [[p.pno + 1, round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1)]
                              for p, x0, y0, x1, y1 in segs],
                 "warnings": warnings,
             })
             for w in warnings:
                 notes.append(f"  ! {label}: {w}")
-        (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
         labels = [it["label"] for it in manifest["items"]]
+        old_path = out_dir / "manifest.json"
+        if args.prefix and old_path.exists():
+            # 다른 문제지(나형 등)에서 자른 것은 두고, 이번에 자른 라벨만 바꾼다
+            old = json.loads(old_path.read_text(encoding="utf-8"))
+            kept = [it for it in old["items"] if it["label"] not in labels]
+            manifest["items"] = sorted(kept + manifest["items"], key=lambda it: number_key(it["label"]))
+        old_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"{d.name}: {len(labels)}개 {labels}")
         for n in notes:
             print(n)
